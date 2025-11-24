@@ -64,6 +64,14 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_MAX_BYTES = int(float(os.getenv("CACHE_MAX_BYTES", str(2 * 1024 ** 3))))
 CACHE_MAX_FILES = int(os.getenv("CACHE_MAX_FILES", "500"))
 MAX_CONCURRENT_DOWNLOADS = max(1, int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3")))
+RAW_COOKIES_PATH = os.getenv("YTDLP_COOKIES", "").strip()
+COOKIES_FILE: Optional[str] = None
+if RAW_COOKIES_PATH:
+    candidate = Path(RAW_COOKIES_PATH).expanduser()
+    if candidate.exists():
+        COOKIES_FILE = str(candidate)
+    else:
+        print(f"[ytdl] warning: cookies file not found at {candidate}")
 
 DEFAULT_EMOJIS = {
     "pause": get_env_emoji("EMOJI_PAUSE", "⏸️"),
@@ -100,6 +108,7 @@ ytdl_format_options = {
     "quiet": True,
     "no_warnings": True,
     "default_search": "auto",
+    "cookiefile": COOKIES_FILE,
 }
 REMOTE_BEFORE_OPTIONS = "-reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 -reconnect_on_network_error 1 -reconnect_on_http_error 4xx,5xx -rw_timeout 10000000 -probesize 32768 -analyzeduration 0"
 BASE_FFMPEG_OPTIONS = "-vn -af aresample=async=1:min_hard_comp=0.100000:first_pts=0 -bufsize 65536"
