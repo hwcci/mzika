@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  discord-bots:
+    build: .
+    container_name: discord-music-bots
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./bot_data:/app/bot_data
+    ports: []
