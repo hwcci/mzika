@@ -234,11 +234,33 @@ class MusicBot(commands.Cog):
             self.last_tracks[player.guild.id] = track
 
     async def prepare_track(self, query: str) -> Optional[wavelink.Playable]:
+        """
+        يحاول يجلب مقطع واحد، سواء كان رابط مباشر أو كلمة بحث.
+        نستخدم Playable.search حتى يدعم كل المصادر اللي يوفّرها Lavalink.
+        """
         try:
-            track = await wavelink.YouTubeTrack.search(query=query, return_first=True)
-        except Exception:
+            node = wavelink.NodePool.get_node()
+        except Exception as exc:
+            print(f"[wavelink] no node ready to search: {exc}")
             return None
-        return track
+
+        try:
+            # Playable.search يرجع إما قائمة، أو Playlist، أو عنصر واحد حسب نوع النتيجة.
+            results = await wavelink.Playable.search(query=query, node=node)
+        except Exception as exc:
+            print(f"[wavelink] search error for '{query}': {exc}")
+            return None
+
+        if not results:
+            return None
+
+        if isinstance(results, wavelink.Playlist):
+            return results.tracks[0] if results.tracks else None
+
+        if isinstance(results, list):
+            return results[0] if results else None
+
+        return results
 
     async def add_to_queue(
         self, ctx: commands.Context, player: wavelink.Player, track: wavelink.Playable
