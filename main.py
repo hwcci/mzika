@@ -222,20 +222,17 @@ class MusicBot(commands.Cog):
         await self.send_panel(panel_channel, member, guild, track_title=track.title)
 
     @commands.Cog.listener()
-    async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
-        player = payload.player
-        track = payload.track
+    async def on_wavelink_track_start(self, player: wavelink.Player, track: wavelink.Playable):
         self.last_tracks[player.guild.id] = track
         await self._maybe_send_panel(player.guild, track)
 
     @commands.Cog.listener()
-    async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload):
-        player = payload.player
+    async def on_wavelink_track_end(self, player: wavelink.Player, track: wavelink.Playable, reason):
         if not player.queue.is_empty:
             next_track = player.queue.get()
             await player.play(next_track)
         else:
-            self.last_tracks[player.guild.id] = payload.track
+            self.last_tracks[player.guild.id] = track
 
     async def prepare_track(self, query: str) -> Optional[wavelink.Playable]:
         try:
