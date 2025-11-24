@@ -246,7 +246,7 @@ class MusicBot(commands.Cog):
 
         try:
             # Playable.search يرجع إما قائمة، أو Playlist، أو عنصر واحد حسب نوع النتيجة.
-            results = await wavelink.Playable.search(query=query, node=node)
+            results = await wavelink.Playable.search(query, node=node)
         except Exception as exc:
             print(f"[wavelink] search error for '{query}': {exc}")
             return None
