@@ -148,7 +148,7 @@ class ControlView(discord.ui.View):
         await self.bot_ref.change_volume(interaction.guild, -10, interaction.response)
 
 
-class MusicBot(commands.Cog, wavelink.WavelinkMixin):
+class MusicBot(commands.Cog):
     def __init__(self, bot: commands.Bot, storage_dir: Path):
         self.bot = bot
         self.storage_dir = storage_dir
@@ -221,14 +221,14 @@ class MusicBot(commands.Cog, wavelink.WavelinkMixin):
             return
         await self.send_panel(panel_channel, member, guild, track_title=track.title)
 
-    @wavelink.WavelinkMixin.listener()
+    @commands.Cog.listener()
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
         player = payload.player
         track = payload.track
         self.last_tracks[player.guild.id] = track
         await self._maybe_send_panel(player.guild, track)
 
-    @wavelink.WavelinkMixin.listener()
+    @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload):
         player = payload.player
         if not player.queue.is_empty:
@@ -640,4 +640,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
