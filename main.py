@@ -162,15 +162,15 @@ class MusicBot(commands.Cog):
 
     async def _connect_lavalink(self):
         await self.bot.wait_until_ready()
-        uri = f"{'https' if LAVA_SSL else 'http'}://{LAVA_HOST}:{LAVA_PORT}"
-        node = wavelink.Node(
-            identifier="MAIN",
-            uri=uri,
+        await wavelink.NodePool.connect(
+            client=self.bot,
+            host=LAVA_HOST,
+            port=LAVA_PORT,
             password=LAVA_PASSWORD,
-            secure=LAVA_SSL,
+            https=LAVA_SSL,
         )
-        await wavelink.NodePool.connect(client=self.bot, nodes=[node])
-        print(f"✅ Lavalink node ready at {uri}")
+        scheme = "https" if LAVA_SSL else "http"
+        print(f"✅ Lavalink node ready at {scheme}://{LAVA_HOST}:{LAVA_PORT}")
 
     def _player(self, guild: discord.Guild) -> Optional[wavelink.Player]:
         vc = guild.voice_client
