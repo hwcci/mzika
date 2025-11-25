@@ -1,5 +1,6 @@
-import os
 import asyncio
+import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# ----------------- إعداد التوكنات -----------------
 def load_tokens() -> list[str]:
     tokens: list[str] = []
     raw = os.getenv("DISCORD_BOT_TOKENS", "")
@@ -25,14 +27,15 @@ def load_tokens() -> list[str]:
             if val:
                 tokens.append(val)
     seen = set()
-    unique_tokens: list[str] = []
-    for token in tokens:
-        if token not in seen:
-            unique_tokens.append(token)
-            seen.add(token)
-    return unique_tokens
+    unique: list[str] = []
+    for t in tokens:
+        if t not in seen:
+            unique.append(t)
+            seen.add(t)
+    return unique
 
 
+# ----------------- إعداد الإيموجيات -----------------
 def get_env_emoji(key: str, default: str) -> str:
     val = os.getenv(key, default).strip()
     return val or default
@@ -49,19 +52,6 @@ def parse_emoji(val: str | None) -> Optional[str]:
     return val
 
 
-TOKENS = load_tokens()
-PREFIX = os.getenv("DISCORD_PREFIX", "!")
-FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
-VOICE_RECONNECT_INTERVAL = max(5.0, float(os.getenv("VOICE_RECONNECT_INTERVAL", "20")))
-MAX_MESSAGE_CACHE = max(100, int(os.getenv("DISCORD_MAX_MESSAGES", "200")))
-TRACK_RETRY_LIMIT = max(0, int(os.getenv("TRACK_RETRY_LIMIT", "3")))
-MANUAL_LEAVE_GRACE = max(0.0, float(os.getenv("MANUAL_LEAVE_GRACE", "15")))
-
-LAVA_HOST = os.getenv("LAVA_HOST", "127.0.0.1")
-LAVA_PORT = int(os.getenv("LAVA_PORT", "2333"))
-LAVA_PASSWORD = os.getenv("LAVA_PASSWORD", "youshallnotpass")
-LAVA_SSL = os.getenv("LAVA_SSL", "false").lower() in {"true", "1", "yes"}
-
 DEFAULT_EMOJIS = {
     "pause": get_env_emoji("EMOJI_PAUSE", "⏸️"),
     "resume": get_env_emoji("EMOJI_RESUME", "▶️"),
@@ -71,7 +61,6 @@ DEFAULT_EMOJIS = {
     "vol_up": get_env_emoji("EMOJI_VOL_UP", "🔼"),
     "vol_down": get_env_emoji("EMOJI_VOL_DOWN", "🔽"),
 }
-
 GLOBAL_EMOJI_OVERRIDES: dict[int, dict[str, str]] = {}
 
 
@@ -82,18 +71,24 @@ def get_guild_emojis(guild_id: int | None) -> dict[str, str]:
     return base
 
 
+# ----------------- إعدادات عامة -----------------
+TOKENS = load_tokens()
+PREFIX = os.getenv("DISCORD_PREFIX", "!")
+MAX_MESSAGE_CACHE = max(100, int(os.getenv("DISCORD_MAX_MESSAGES", "200")))
+
+LAVA_HOST = os.getenv("LAVA_HOST", "127.0.0.1")
+LAVA_PORT = int(os.getenv("LAVA_PORT", "2333"))
+LAVA_PASSWORD = os.getenv("LAVA_PASSWORD", "youshallnotpass")
+LAVA_SSL = os.getenv("LAVA_SSL", "false").lower() in {"true", "1", "yes"}
+
+
+# ----------------- لوحة التحكم -----------------
 class ControlView(discord.ui.View):
-    def __init__(
-        self,
-        owner: discord.Member,
-        emojis: dict[str, str],
-        bot: "MusicBot",
-        guild: discord.Guild,
-    ):
+    def __init__(self, owner: discord.Member, emojis: dict[str, str], cog: "MusicCog", guild: discord.Guild):
         super().__init__(timeout=180)
         self.owner_id = owner.id
         self.emojis = emojis
-        self.bot_ref = bot
+        self.cog = cog
         self.guild = guild
         self._apply_emojis()
 
@@ -117,204 +112,150 @@ class ControlView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "هذا البانل مخصص لمن أنشأه فقط.", ephemeral=True
-            )
+            await interaction.response.send_message("هذا البانل مخصص لك فقط.", ephemeral=True)
             return False
         return True
 
     @discord.ui.button(label="\u200b", style=discord.ButtonStyle.secondary, custom_id="control_play")
     async def play_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.bot_ref.resume_track(interaction.guild, interaction.response)
+        await self.cog.resume_track(self.guild, interaction.response)
 
     @discord.ui.button(label="\u200b", style=discord.ButtonStyle.secondary, custom_id="control_stop")
     async def stop_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.bot_ref.stop_track(interaction.guild, interaction.response)
+        await self.cog.stop_track(self.guild, interaction.response)
 
     @discord.ui.button(label="\u200b", style=discord.ButtonStyle.secondary, custom_id="control_skip")
     async def skip_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.bot_ref.skip_track(interaction.guild, interaction.response)
+        await self.cog.skip_track(self.guild, interaction.response)
 
     @discord.ui.button(label="\u200b", style=discord.ButtonStyle.secondary, custom_id="control_restart")
     async def restart_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.bot_ref.restart_track(interaction.guild, interaction.response)
+        await self.cog.restart_track(self.guild, interaction.response)
 
     @discord.ui.button(label="\u200b", style=discord.ButtonStyle.secondary, custom_id="control_vol_up")
     async def volume_up_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.bot_ref.change_volume(interaction.guild, 10, interaction.response)
+        await self.cog.change_volume(self.guild, 10, interaction.response)
 
     @discord.ui.button(label="\u200b", style=discord.ButtonStyle.secondary, custom_id="control_vol_down")
     async def volume_down_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.bot_ref.change_volume(interaction.guild, -10, interaction.response)
+        await self.cog.change_volume(self.guild, -10, interaction.response)
 
 
-class MusicBot(commands.Cog):
+# ----------------- الكوج الرئيسي -----------------
+class MusicCog(commands.Cog):
     def __init__(self, bot: commands.Bot, storage_dir: Path):
         self.bot = bot
         self.storage_dir = storage_dir
         self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self.claims_file = self.storage_dir / "guild_claims.json"
         self.text_channels: dict[int, int] = {}
         self.last_tracks: dict[int, wavelink.Playable | None] = {}
         self.volumes: dict[int, int] = {}
-        self.manual_disconnects: dict[int, float] = {}
-        self.rejoin_tasks: dict[int, asyncio.Task] = {}
-        self.guild_claims: dict[int, int] = {}
-        self._load_claims()
-        self.bot.loop.create_task(self._connect_lavalink())
+        self.node_ready = asyncio.Event()
+        self.bot.loop.create_task(self._connect_node_loop())
 
-    async def _connect_lavalink(self):
+    async def _connect_node_loop(self):
         await self.bot.wait_until_ready()
-        scheme = "https" if LAVA_SSL else "http"
-        node = wavelink.Node(
-            uri=f"{scheme}://{LAVA_HOST}:{LAVA_PORT}",
-            password=LAVA_PASSWORD,
-            secure=LAVA_SSL,
-        )
-        await wavelink.NodePool.connect(client=self.bot, nodes=[node])
-        print(f"✅ Lavalink node ready at {scheme}://{LAVA_HOST}:{LAVA_PORT}")
-
-    def _load_claims(self):
-        if self.claims_file.exists():
+        while not self.bot.is_closed():
             try:
-                import json
+                scheme = "https" if LAVA_SSL else "http"
+                node = wavelink.Node(uri=f"{scheme}://{LAVA_HOST}:{LAVA_PORT}", password=LAVA_PASSWORD, secure=LAVA_SSL)
+                await wavelink.NodePool.connect(client=self.bot, nodes=[node])
+                print(f"✅ Lavalink node ready at {scheme}://{LAVA_HOST}:{LAVA_PORT}")
+                self.node_ready.set()
+                return
+            except Exception as exc:
+                print(f"[lavalink] failed to connect, retrying in 5s: {exc}")
+                await asyncio.sleep(5)
 
-                data = json.loads(self.claims_file.read_text(encoding="utf-8"))
-                self.guild_claims = {int(k): int(v) for k, v in data.items()}
-            except Exception:
-                self.guild_claims = {}
-
-    def _persist_claims(self):
-        try:
-            import json
-
-            self.claims_file.write_text(
-                json.dumps({str(k): v for k, v in self.guild_claims.items()}),
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
-
-    def _claim_allows(self, guild: Optional[discord.Guild]) -> bool:
-        if not guild or not self.bot.user:
-            return False
-        owner = self.guild_claims.get(guild.id)
-        if owner is None:
-            return True
-        return owner == self.bot.user.id
-
-    def _claim_guild(self, guild: Optional[discord.Guild]):
-        if not guild or not self.bot.user:
-            return
-        if guild.id not in self.guild_claims:
-            self.guild_claims[guild.id] = self.bot.user.id
-            self._persist_claims()
-
-    def _release_guild(self, guild: Optional[discord.Guild]):
-        if not guild or not self.bot.user:
-            return
-        owner = self.guild_claims.get(guild.id)
-        if owner == self.bot.user.id:
-            self.guild_claims.pop(guild.id, None)
-            self._persist_claims()
-
-    def _player(self, guild: discord.Guild) -> Optional[wavelink.Player]:
+    def _player(self, guild: discord.Guild | None) -> Optional[wavelink.Player]:
+        if not guild:
+            return None
         vc = guild.voice_client
         if vc and isinstance(vc, wavelink.Player):
             return vc
         return None
 
-    async def _connect_player(
-        self, ctx: commands.Context, channel: Optional[discord.VoiceChannel] = None
-    ) -> Optional[wavelink.Player]:
+    async def _connect_player(self, ctx: commands.Context, channel: Optional[discord.VoiceChannel] = None) -> Optional[wavelink.Player]:
         if not ctx.guild:
             return None
-        if not self._claim_allows(ctx.guild):
-            return None
+        await self.node_ready.wait()
         player = self._player(ctx.guild)
         if player:
             return player
         target = channel or (ctx.author.voice.channel if ctx.author.voice else None)
         if not target:
-            await ctx.send("⚠️ ادخل روم صوتي أولاً.")
+            await ctx.send("⚠️ ادخل قناة صوتية أولاً.")
             return None
         player = await target.connect(cls=wavelink.Player)
-        player.autoplay = wavelink.AutoPlayMode.disabled
         player.queue = wavelink.Queue()
+        player.autoplay = wavelink.AutoPlayMode.disabled
         self.volumes[ctx.guild.id] = 100
         await player.set_volume(100)
-        self._claim_guild(ctx.guild)
         return player
 
-    def _record_text_channel(
-        self, guild: discord.Guild | None, channel: Optional[discord.abc.GuildChannel]
-    ):
-        if not guild or not channel:
-            return
+    async def _send_panel(self, channel: Messageable, member: discord.Member, guild: discord.Guild, track_title: Optional[str]):
+        emojis = get_guild_emojis(guild.id)
+        view = ControlView(member, emojis, self, guild)
+        text = f"🎶 **{(track_title or 'غير معروف').strip()}**"
+        try:
+            await channel.send(text, view=view)
+        except Exception as exc:
+            print(f"[panel] send failed in {guild.name}: {exc}")
+
+    async def _record_text_channel(self, guild: discord.Guild, channel: discord.abc.GuildChannel | discord.Thread):
         if isinstance(channel, (discord.TextChannel, discord.Thread)):
             self.text_channels[guild.id] = channel.id
+            path = self.storage_dir / "text_channels.json"
+            try:
+                path.write_text(json.dumps({str(k): v for k, v in self.text_channels.items()}), encoding="utf-8")
+            except Exception:
+                pass
 
-    async def _maybe_send_panel(self, guild: discord.Guild, track: wavelink.Playable):
-        channel_id = self.text_channels.get(guild.id)
-        channel = guild.get_channel(channel_id) if channel_id else None
-        if isinstance(channel, discord.Thread):
-            panel_channel: Optional[Messageable] = channel
-        elif isinstance(channel, discord.TextChannel):
-            panel_channel = channel
-        else:
-            panel_channel = None
-        if not panel_channel:
-            return
-        member = guild.me
-        if not member:
-            return
-        await self.send_panel(panel_channel, member, guild, track_title=track.title)
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print(f"✅ {self.bot.user} جاهز.")
+        # تحميل قنوات النص المخزنة
+        path = self.storage_dir / "text_channels.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.text_channels = {int(k): int(v) for k, v in data.items()}
+            except Exception:
+                self.text_channels = {}
 
     @commands.Cog.listener()
     async def on_wavelink_track_start(self, player: wavelink.Player, track: wavelink.Playable):
         self.last_tracks[player.guild.id] = track
-        await self._maybe_send_panel(player.guild, track)
+        channel_id = self.text_channels.get(player.guild.id)
+        channel = player.guild.get_channel(channel_id) if channel_id else None
+        member = player.guild.me
+        if channel and member:
+            await self._send_panel(channel, member, player.guild, track.title)
 
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, player: wavelink.Player, track: wavelink.Playable, reason):
         if not player.queue.is_empty:
-            next_track = player.queue.get()
-            await player.play(next_track)
+            nxt = player.queue.get()
+            await player.play(nxt)
         else:
             self.last_tracks[player.guild.id] = track
 
     async def prepare_track(self, query: str) -> Optional[wavelink.Playable]:
-        """
-        يحاول يجلب مقطع واحد، سواء كان رابط مباشر أو كلمة بحث.
-        نستخدم Playable.search حتى يدعم كل المصادر اللي يوفّرها Lavalink.
-        """
         try:
             node = wavelink.NodePool.get_node()
-        except Exception as exc:
-            print(f"[wavelink] no node ready to search: {exc}")
-            return None
-
-        try:
-            # Playable.search يرجع إما قائمة، أو Playlist، أو عنصر واحد حسب نوع النتيجة.
             results = await wavelink.Playable.search(query, node=node)
         except Exception as exc:
             print(f"[wavelink] search error for '{query}': {exc}")
             return None
-
         if not results:
             return None
-
         if isinstance(results, wavelink.Playlist):
             return results.tracks[0] if results.tracks else None
-
         if isinstance(results, list):
-            return results[0] if results else None
-
+            return results[0]
         return results
 
-    async def add_to_queue(
-        self, ctx: commands.Context, player: wavelink.Player, track: wavelink.Playable
-    ):
+    async def add_to_queue(self, ctx: commands.Context, player: wavelink.Player, track: wavelink.Playable):
         track.extra = {
             "requester_id": ctx.author.id,
             "text_channel_id": ctx.channel.id if isinstance(ctx.channel, (discord.TextChannel, discord.Thread)) else None,
@@ -326,23 +267,19 @@ class MusicBot(commands.Cog):
             player.queue.put(track)
             await ctx.send(f"✅ أضيف **{track.title}** إلى قائمة الانتظار.")
 
-    async def skip_track(
-        self,
-        guild: discord.Guild | None,
-        response: Optional[discord.InteractionResponse] = None,
-    ) -> Optional[str]:
+    async def skip_track(self, guild: discord.Guild | None, response: Optional[discord.InteractionResponse] = None) -> Optional[str]:
         if not guild:
             return "⚠️ لا يوجد سيرفر."
         player = self._player(guild)
         if not player or not player.is_playing():
-            msg = "⚠️ لا يوجد تشغيل حالي."
+            msg = "⚠️ لا يوجد تشغيل."
             if response:
                 await response.send_message(msg, ephemeral=True)
                 return None
             return msg
         if not player.queue.is_empty:
-            next_track = player.queue.get()
-            await player.play(next_track)
+            nxt = player.queue.get()
+            await player.play(nxt)
         else:
             await player.stop()
         msg = "⏭️ تم التخطي."
@@ -351,16 +288,12 @@ class MusicBot(commands.Cog):
             return None
         return msg
 
-    async def stop_track(
-        self,
-        guild: discord.Guild | None,
-        response: Optional[discord.InteractionResponse] = None,
-    ) -> Optional[str]:
+    async def stop_track(self, guild: discord.Guild | None, response: Optional[discord.InteractionResponse] = None) -> Optional[str]:
         if not guild:
             return "⚠️ لا يوجد سيرفر."
         player = self._player(guild)
         if not player:
-            msg = "⚠️ غير متصل بقناة صوتية."
+            msg = "⚠️ غير متصل."
             if response:
                 await response.send_message(msg, ephemeral=True)
                 return None
@@ -373,44 +306,36 @@ class MusicBot(commands.Cog):
             return None
         return msg
 
-    async def restart_track(
-        self,
-        guild: discord.Guild | None,
-        response: Optional[discord.InteractionResponse] = None,
-    ) -> Optional[str]:
+    async def restart_track(self, guild: discord.Guild | None, response: Optional[discord.InteractionResponse] = None) -> Optional[str]:
         if not guild:
             return "⚠️ لا يوجد سيرفر."
         player = self._player(guild)
         if not player:
-            msg = "⚠️ غير متصل بقناة صوتية."
+            msg = "⚠️ غير متصل."
             if response:
                 await response.send_message(msg, ephemeral=True)
                 return None
             return msg
         last = self.last_tracks.get(guild.id)
         if not last:
-            msg = "⚠️ لا يوجد مسار لإعادته."
+            msg = "⚠️ لا يوجد مسار سابق."
             if response:
                 await response.send_message(msg, ephemeral=True)
                 return None
             return msg
         await player.play(last)
-        msg = "🔁 تمت إعادة تشغيل المسار."
+        msg = "🔁 تم إعادة التشغيل."
         if response:
             await response.send_message(msg, ephemeral=True)
             return None
         return msg
 
-    async def resume_track(
-        self,
-        guild: discord.Guild | None,
-        response: Optional[discord.InteractionResponse] = None,
-    ) -> Optional[str]:
+    async def resume_track(self, guild: discord.Guild | None, response: Optional[discord.InteractionResponse] = None) -> Optional[str]:
         if not guild:
             return "⚠️ لا يوجد سيرفر."
         player = self._player(guild)
         if not player:
-            msg = "⚠️ غير متصل بقناة صوتية."
+            msg = "⚠️ غير متصل."
             if response:
                 await response.send_message(msg, ephemeral=True)
                 return None
@@ -419,27 +344,22 @@ class MusicBot(commands.Cog):
             await player.resume()
             msg = "▶️ تم الاستئناف."
         elif not player.is_playing() and not player.queue.is_empty:
-            next_track = player.queue.get()
-            await player.play(next_track)
+            nxt = player.queue.get()
+            await player.play(nxt)
             msg = "▶️ يتم الآن التشغيل."
         else:
-            msg = "⚠️ لا يوجد شيء للتشغيل."
+            msg = "⚠️ لا يوجد تشغيل."
         if response:
             await response.send_message(msg, ephemeral=True)
             return None
         return msg
 
-    async def change_volume(
-        self,
-        guild: discord.Guild | None,
-        delta: int,
-        response: Optional[discord.InteractionResponse] = None,
-    ) -> Optional[str]:
+    async def change_volume(self, guild: discord.Guild | None, delta: int, response: Optional[discord.InteractionResponse] = None) -> Optional[str]:
         if not guild:
             return "⚠️ لا يوجد سيرفر."
         player = self._player(guild)
         if not player:
-            msg = "⚠️ غير متصل بقناة صوتية."
+            msg = "⚠️ غير متصل."
             if response:
                 await response.send_message(msg, ephemeral=True)
                 return None
@@ -454,49 +374,22 @@ class MusicBot(commands.Cog):
             return None
         return msg
 
-    async def send_panel(
-        self,
-        channel: Messageable,
-        member: discord.Member,
-        guild: Optional[discord.Guild] = None,
-        track_title: Optional[str] = None,
-    ):
-        target_guild = guild or getattr(channel, "guild", None)
-        if not target_guild:
-            return
-        panel_text = "\u200b"
-        if track_title:
-            panel_text = f"🎶 **{track_title.strip() or 'غير معروف'}**"
-        emojis = get_guild_emojis(target_guild.id)
-        view = ControlView(member, emojis, self, target_guild)
-        try:
-            await channel.send(panel_text, view=view)
-        except Exception as exc:
-            print(f"[panel] failed to send in {target_guild.name}: {exc}")
-
+    # ----------------- الأوامر النصية -----------------
     @commands.command(name="join")
     async def join(self, ctx, channel: discord.VoiceChannel | None = None):
-        if not self._claim_allows(ctx.guild):
-            await ctx.send("⚠️ هذا السيرفر موكّل لبوت آخر حالياً.", delete_after=10)
-            return
         player = await self._connect_player(ctx, channel)
-        if player and ctx.guild:
-            self._record_text_channel(ctx.guild, ctx.channel)
+        if player:
+            await self._record_text_channel(ctx.guild, ctx.channel)  # type: ignore
             await ctx.send(f"✅ انضممت إلى: {player.channel.name}")
-        else:
-            await ctx.send("⚠️ تعذر الاتصال بالقناة.", delete_after=10)
 
     @commands.command(name="شغل")
     async def play_ar(self, ctx, *, query: str):
         if not ctx.guild:
             return
-        if not self._claim_allows(ctx.guild):
-            return
         player = await self._connect_player(ctx)
         if not player:
             return
-        self._claim_guild(ctx.guild)
-        self._record_text_channel(ctx.guild, ctx.channel)
+        await self._record_text_channel(ctx.guild, ctx.channel)  # type: ignore
         track = await self.prepare_track(query)
         if not track:
             await ctx.send("⚠️ لم أستطع جلب الصوت.")
@@ -505,62 +398,43 @@ class MusicBot(commands.Cog):
 
     @commands.command()
     async def stop(self, ctx):
-        if ctx.guild:
-            self._claim_guild(ctx.guild)
         msg = await self.stop_track(ctx.guild)
         if msg:
             await ctx.send(msg)
 
     @commands.command()
     async def pause(self, ctx):
-        if ctx.guild and not self._claim_allows(ctx.guild):
-            return
-        player = self._player(ctx.guild) if ctx.guild else None
-        if not player or not player.is_playing():
-            await ctx.send("⚠️ لا يوجد تشغيل.")
-            return
-        await player.pause()
-        await ctx.send("⏸️ تم الإيقاف.")
+        msg = await self.resume_track(ctx.guild)  # reuse resume/ pause toggling
+        if msg:
+            await ctx.send(msg)
 
     @commands.command()
     async def resume(self, ctx):
-        if ctx.guild and not self._claim_allows(ctx.guild):
-            return
         msg = await self.resume_track(ctx.guild)
         if msg:
             await ctx.send(msg)
 
     @commands.command()
     async def skip(self, ctx):
-        if ctx.guild and not self._claim_allows(ctx.guild):
-            return
         msg = await self.skip_track(ctx.guild)
         if msg:
             await ctx.send(msg)
 
     @commands.command()
     async def leave(self, ctx):
-        if not ctx.guild:
-            return
-        if not self._claim_allows(ctx.guild):
-            return
-        player = self._player(ctx.guild)
+        player = self._player(ctx.guild) if ctx.guild else None
         if player:
-            self.manual_disconnects[ctx.guild.id] = asyncio.get_event_loop().time()
             await player.disconnect()
             await ctx.send("👋 تم قطع الاتصال.")
-            self._release_guild(ctx.guild)
 
     @commands.command()
     async def panel(self, ctx):
         if not ctx.guild:
             return
-        if not self._claim_allows(ctx.guild):
-            return
-        self._record_text_channel(ctx.guild, ctx.channel)
+        await self._record_text_channel(ctx.guild, ctx.channel)  # type: ignore
         player = self._player(ctx.guild)
         title = player.current.title if player and player.current else None
-        await self.send_panel(ctx.channel, ctx.author, ctx.guild, track_title=title)
+        await self._send_panel(ctx.channel, ctx.author, ctx.guild, track_title=title)  # type: ignore
 
     @commands.command()
     async def setemojis(
@@ -577,8 +451,6 @@ class MusicBot(commands.Cog):
         if not ctx.guild:
             await ctx.send("⚠️ داخل سيرفر فقط.")
             return
-        if not self._claim_allows(ctx.guild):
-            return
         overrides = GLOBAL_EMOJI_OVERRIDES.setdefault(ctx.guild.id, {})
         if (em := parse_emoji(pause)):
             overrides["pause"] = em
@@ -594,20 +466,17 @@ class MusicBot(commands.Cog):
             overrides["vol_up"] = em
         if (em := parse_emoji(voldown)):
             overrides["vol_down"] = em
-        await ctx.send("✅ الإيموجيات تم تحديثها لجميع البوتات.")
+        await ctx.send("✅ الإيموجيات تم تحديثها.")
 
+    # ----------------- السلاش -----------------
     @app_commands.command(name="join", description="إدخال البوت قناة صوتية محددة")
-    @app_commands.describe(channel="القناة الصوتية (اختياري)")
     async def slash_join(self, interaction: discord.Interaction, channel: discord.VoiceChannel | None = None):
         if not interaction.guild:
-            return
-        if not self._claim_allows(interaction.guild):
-            await interaction.response.send_message("⚠️ هذا السيرفر موكّل لبوت آخر حالياً.", ephemeral=True)
             return
         ctx = await commands.Context.from_interaction(interaction)  # type: ignore
         player = await self._connect_player(ctx, channel)
         if player and interaction.guild:
-            self._record_text_channel(interaction.guild, interaction.channel)
+            await self._record_text_channel(interaction.guild, interaction.channel)  # type: ignore
             await interaction.response.send_message(f"✅ انضممت إلى: {player.channel.name}", ephemeral=True)
         else:
             await interaction.response.send_message("⚠️ تعذر الاتصال بالقناة.", ephemeral=True)
@@ -616,19 +485,14 @@ class MusicBot(commands.Cog):
     async def slash_panel(self, interaction: discord.Interaction):
         if not interaction.guild or not interaction.channel:
             return
-        self._record_text_channel(interaction.guild, interaction.channel)
+        await self._record_text_channel(interaction.guild, interaction.channel)
         player = self._player(interaction.guild)
         title = player.current.title if player and player.current else None
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        await self.send_panel(
-            interaction.channel,
-            interaction.user,
-            interaction.guild,
-            track_title=title,
-        )
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        await self._send_panel(interaction.channel, interaction.user, interaction.guild, track_title=title)  # type: ignore
         await interaction.followup.send("✅ أرسلت اللوحة.", ephemeral=True)
 
-    @app_commands.command(name="setemojis", description="تغيير إيموجيات البانال للجميع")
+    @app_commands.command(name="setemojis", description="تغيير إيموجيات البانل")
     async def slash_setemojis(
         self,
         interaction: discord.Interaction,
@@ -641,9 +505,6 @@ class MusicBot(commands.Cog):
         voldown: str | None = None,
     ):
         if not interaction.guild:
-            return
-        if not self._claim_allows(interaction.guild):
-            await interaction.response.send_message("سيرفر هذا البوت موكّل لبوت آخر.", ephemeral=True)
             return
         overrides = GLOBAL_EMOJI_OVERRIDES.setdefault(interaction.guild.id, {})
         if (em := parse_emoji(pause)):
@@ -663,29 +524,33 @@ class MusicBot(commands.Cog):
         await interaction.response.send_message("✅ تم تحديث الإيموجيات.", ephemeral=True)
 
 
+# ----------------- بناء البوت -----------------
 def build_bot() -> commands.Bot:
-    storage_dir = Path("bot_data")
     intents = discord.Intents.default()
     intents.message_content = True
     intents.voice_states = True
+
     bot = commands.Bot(
         command_prefix=commands.when_mentioned_or(PREFIX),
         intents=intents,
         max_messages=MAX_MESSAGE_CACHE,
     )
 
+    storage_dir = Path("bot_data")
+
     @bot.event
     async def on_ready():
         print(f"✅ {bot.user} جاهز.")
 
     async def setup_hook():
-        await bot.add_cog(MusicBot(bot, storage_dir))
+        await bot.add_cog(MusicCog(bot, storage_dir))
         await bot.tree.sync()
 
     bot.setup_hook = setup_hook  # type: ignore
     return bot
 
 
+# ----------------- تشغيل عدة بوتات -----------------
 async def launch_bot(token: str, index: int, restart_delay: float):
     attempt = 0
     while True:
