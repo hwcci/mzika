@@ -477,11 +477,14 @@ class MusicBot(commands.Cog):
     @commands.command(name="join")
     async def join(self, ctx, channel: discord.VoiceChannel | None = None):
         if not self._claim_allows(ctx.guild):
+            await ctx.send("⚠️ هذا السيرفر موكّل لبوت آخر حالياً.", delete_after=10)
             return
         player = await self._connect_player(ctx, channel)
         if player and ctx.guild:
             self._record_text_channel(ctx.guild, ctx.channel)
             await ctx.send(f"✅ انضممت إلى: {player.channel.name}")
+        else:
+            await ctx.send("⚠️ تعذر الاتصال بالقناة.", delete_after=10)
 
     @commands.command(name="شغل")
     async def play_ar(self, ctx, *, query: str):
@@ -598,9 +601,16 @@ class MusicBot(commands.Cog):
     async def slash_join(self, interaction: discord.Interaction, channel: discord.VoiceChannel | None = None):
         if not interaction.guild:
             return
+        if not self._claim_allows(interaction.guild):
+            await interaction.response.send_message("⚠️ هذا السيرفر موكّل لبوت آخر حالياً.", ephemeral=True)
+            return
         ctx = await commands.Context.from_interaction(interaction)  # type: ignore
-        await self.join(ctx, channel=channel)
-        await interaction.response.send_message("✅ تمت المعالجة.", ephemeral=True)
+        player = await self._connect_player(ctx, channel)
+        if player and interaction.guild:
+            self._record_text_channel(interaction.guild, interaction.channel)
+            await interaction.response.send_message(f"✅ انضممت إلى: {player.channel.name}", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ تعذر الاتصال بالقناة.", ephemeral=True)
 
     @app_commands.command(name="panel", description="إظهار لوحة التحكم الخاصة بالبث")
     async def slash_panel(self, interaction: discord.Interaction):
