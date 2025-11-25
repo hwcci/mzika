@@ -153,11 +153,14 @@ class MusicBot(commands.Cog):
         self.bot = bot
         self.storage_dir = storage_dir
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.claims_file = self.storage_dir / "guild_claims.json"
         self.text_channels: dict[int, int] = {}
         self.last_tracks: dict[int, wavelink.Playable | None] = {}
         self.volumes: dict[int, int] = {}
         self.manual_disconnects: dict[int, float] = {}
         self.rejoin_tasks: dict[int, asyncio.Task] = {}
+        self.guild_claims: dict[int, int] = {}
+        self._load_claims()
         self.bot.loop.create_task(self._connect_lavalink())
 
     async def _connect_lavalink(self):
@@ -171,6 +174,50 @@ class MusicBot(commands.Cog):
         await wavelink.NodePool.connect(client=self.bot, nodes=[node])
         print(f"✅ Lavalink node ready at {scheme}://{LAVA_HOST}:{LAVA_PORT}")
 
+    def _load_claims(self):
+        if self.claims_file.exists():
+            try:
+                import json
+
+                data = json.loads(self.claims_file.read_text(encoding="utf-8"))
+                self.guild_claims = {int(k): int(v) for k, v in data.items()}
+            except Exception:
+                self.guild_claims = {}
+
+    def _persist_claims(self):
+        try:
+            import json
+
+            self.claims_file.write_text(
+                json.dumps({str(k): v for k, v in self.guild_claims.items()}),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _claim_allows(self, guild: Optional[discord.Guild]) -> bool:
+        if not guild or not self.bot.user:
+            return False
+        owner = self.guild_claims.get(guild.id)
+        if owner is None:
+            return True
+        return owner == self.bot.user.id
+
+    def _claim_guild(self, guild: Optional[discord.Guild]):
+        if not guild or not self.bot.user:
+            return
+        if guild.id not in self.guild_claims:
+            self.guild_claims[guild.id] = self.bot.user.id
+            self._persist_claims()
+
+    def _release_guild(self, guild: Optional[discord.Guild]):
+        if not guild or not self.bot.user:
+            return
+        owner = self.guild_claims.get(guild.id)
+        if owner == self.bot.user.id:
+            self.guild_claims.pop(guild.id, None)
+            self._persist_claims()
+
     def _player(self, guild: discord.Guild) -> Optional[wavelink.Player]:
         vc = guild.voice_client
         if vc and isinstance(vc, wavelink.Player):
@@ -181,6 +228,8 @@ class MusicBot(commands.Cog):
         self, ctx: commands.Context, channel: Optional[discord.VoiceChannel] = None
     ) -> Optional[wavelink.Player]:
         if not ctx.guild:
+            return None
+        if not self._claim_allows(ctx.guild):
             return None
         player = self._player(ctx.guild)
         if player:
@@ -194,6 +243,7 @@ class MusicBot(commands.Cog):
         player.queue = wavelink.Queue()
         self.volumes[ctx.guild.id] = 100
         await player.set_volume(100)
+        self._claim_guild(ctx.guild)
         return player
 
     def _record_text_channel(
@@ -426,6 +476,8 @@ class MusicBot(commands.Cog):
 
     @commands.command(name="join")
     async def join(self, ctx, channel: discord.VoiceChannel | None = None):
+        if not self._claim_allows(ctx.guild):
+            return
         player = await self._connect_player(ctx, channel)
         if player and ctx.guild:
             self._record_text_channel(ctx.guild, ctx.channel)
@@ -435,9 +487,12 @@ class MusicBot(commands.Cog):
     async def play_ar(self, ctx, *, query: str):
         if not ctx.guild:
             return
+        if not self._claim_allows(ctx.guild):
+            return
         player = await self._connect_player(ctx)
         if not player:
             return
+        self._claim_guild(ctx.guild)
         self._record_text_channel(ctx.guild, ctx.channel)
         track = await self.prepare_track(query)
         if not track:
@@ -447,12 +502,16 @@ class MusicBot(commands.Cog):
 
     @commands.command()
     async def stop(self, ctx):
+        if ctx.guild:
+            self._claim_guild(ctx.guild)
         msg = await self.stop_track(ctx.guild)
         if msg:
             await ctx.send(msg)
 
     @commands.command()
     async def pause(self, ctx):
+        if ctx.guild and not self._claim_allows(ctx.guild):
+            return
         player = self._player(ctx.guild) if ctx.guild else None
         if not player or not player.is_playing():
             await ctx.send("⚠️ لا يوجد تشغيل.")
@@ -462,12 +521,16 @@ class MusicBot(commands.Cog):
 
     @commands.command()
     async def resume(self, ctx):
+        if ctx.guild and not self._claim_allows(ctx.guild):
+            return
         msg = await self.resume_track(ctx.guild)
         if msg:
             await ctx.send(msg)
 
     @commands.command()
     async def skip(self, ctx):
+        if ctx.guild and not self._claim_allows(ctx.guild):
+            return
         msg = await self.skip_track(ctx.guild)
         if msg:
             await ctx.send(msg)
@@ -476,15 +539,20 @@ class MusicBot(commands.Cog):
     async def leave(self, ctx):
         if not ctx.guild:
             return
+        if not self._claim_allows(ctx.guild):
+            return
         player = self._player(ctx.guild)
         if player:
             self.manual_disconnects[ctx.guild.id] = asyncio.get_event_loop().time()
             await player.disconnect()
             await ctx.send("👋 تم قطع الاتصال.")
+            self._release_guild(ctx.guild)
 
     @commands.command()
     async def panel(self, ctx):
         if not ctx.guild:
+            return
+        if not self._claim_allows(ctx.guild):
             return
         self._record_text_channel(ctx.guild, ctx.channel)
         player = self._player(ctx.guild)
@@ -505,6 +573,8 @@ class MusicBot(commands.Cog):
     ):
         if not ctx.guild:
             await ctx.send("⚠️ داخل سيرفر فقط.")
+            return
+        if not self._claim_allows(ctx.guild):
             return
         overrides = GLOBAL_EMOJI_OVERRIDES.setdefault(ctx.guild.id, {})
         if (em := parse_emoji(pause)):
@@ -561,6 +631,9 @@ class MusicBot(commands.Cog):
         voldown: str | None = None,
     ):
         if not interaction.guild:
+            return
+        if not self._claim_allows(interaction.guild):
+            await interaction.response.send_message("سيرفر هذا البوت موكّل لبوت آخر.", ephemeral=True)
             return
         overrides = GLOBAL_EMOJI_OVERRIDES.setdefault(interaction.guild.id, {})
         if (em := parse_emoji(pause)):
